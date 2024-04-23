@@ -11,7 +11,6 @@ use crate::env::Statuses;
 use crate::event::{self, Event};
 use crate::flog::{FLOG, FLOGF};
 use crate::global_safety::RelaxedAtomicBool;
-use crate::input_common::terminal_protocols_enable;
 use crate::io::IoChain;
 use crate::job_group::{JobGroup, MaybeJobId};
 use crate::parse_tree::ParsedSourceRef;
@@ -616,13 +615,11 @@ impl Process {
         Default::default()
     }
 
-    /// Retrieves the associated [`libc::pid_t`] or panics if no pid has been set (not yet set or
-    /// process does not get a pid).
+    /// Retrieves the associated [`libc::pid_t`], 0 if unset.
     ///
     /// See [`Process::has_pid()]` to safely check if the process has a pid.
     pub fn pid(&self) -> libc::pid_t {
         let value = self.pid.load(Ordering::Relaxed);
-        assert!(value != 0, "Process::pid() called but pid not set!");
         #[allow(clippy::useless_conversion)]
         value.into()
     }
@@ -1413,9 +1410,6 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
             let status = ProcStatus::from_waitpid(statusv);
             handle_child_status(j, proc, &status);
             if status.stopped() {
-                if is_interactive_session() {
-                    terminal_protocols_enable();
-                }
                 j.group().set_is_foreground(false);
             }
             if status.continued() {

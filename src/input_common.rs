@@ -21,6 +21,7 @@ use crate::wutil::encoding::{mbrtowc, mbstate_t, zero_mbstate};
 use crate::wutil::{fish_wcstol, write_to_fd};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::ops::ControlFlow;
 use std::os::fd::RawFd;
 use std::ptr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -363,6 +364,7 @@ fn readb(in_fd: RawFd, blocking: bool) -> ReadbResult {
                 // The terminal has been closed.
                 return ReadbResult::Eof;
             }
+            FLOG!(reader, "Read byte {}", arr[0]);
             // The common path is to return a u8.
             return ReadbResult::Byte(arr[0]);
         }
@@ -431,14 +433,14 @@ pub fn update_wait_on_sequence_key_ms(vars: &EnvStack) {
 pub static TERMINAL_PROTOCOLS: MainThread<RefCell<Option<TerminalProtocols>>> =
     MainThread::new(RefCell::new(None));
 
-pub fn terminal_protocols_enable() {
+fn terminal_protocols_enable() {
     assert!(TERMINAL_PROTOCOLS.get().borrow().is_none());
     TERMINAL_PROTOCOLS
         .get()
         .replace(Some(TerminalProtocols::new()));
 }
 
-pub fn terminal_protocols_disable() {
+fn terminal_protocols_disable() {
     assert!(TERMINAL_PROTOCOLS.get().borrow().is_some());
     TERMINAL_PROTOCOLS.get().replace(None);
 }
@@ -454,7 +456,9 @@ pub fn terminal_protocols_disable_scoped() -> impl ScopeGuarding<Target = ()> {
         // If a child is stopped, this will already be enabled.
         if TERMINAL_PROTOCOLS.get().borrow().is_none() {
             terminal_protocols_enable();
-            reader_current_data().unwrap().save_screen_state();
+            if let Some(data) = reader_current_data() {
+                data.save_screen_state();
+            }
         }
     })
 }
@@ -529,7 +533,9 @@ pub(crate) fn focus_events_enable_ifn() {
     if !term_protocols.focus_events {
         term_protocols.focus_events = true;
         let _ = write_to_fd("\x1b[?1004h".as_bytes(), STDOUT_FILENO);
-        reader_current_data().unwrap().save_screen_state();
+        if let Some(data) = reader_current_data() {
+            data.save_screen_state();
+        }
     }
 }
 
@@ -553,7 +559,6 @@ pub trait InputEventQueuer {
     /// convert them to a wchar_t. Conversion is done using mbrtowc. If a character has previously
     /// been read and then 'unread' using \c input_common_unreadch, that character is returned.
     fn readch(&mut self) -> CharEvent {
-        let mut state = zero_mbstate();
         loop {
             // Do we have something enqueued already?
             // Note this may be initially true, or it may become true through calls to
@@ -606,8 +611,16 @@ pub trait InputEventQueuer {
                         continue;
                     }
                     let mut consumed = 0;
-                    for i in 0..buffer.len() {
-                        self.parse_codepoint(
+                    let mut state = zero_mbstate();
+                    let mut i = 0;
+                    let ok = loop {
+                        if i == buffer.len() {
+                            buffer.push(match readb(self.get_in_fd(), /*blocking=*/ true) {
+                                ReadbResult::Byte(b) => b,
+                                _ => 0,
+                            });
+                        }
+                        match self.parse_codepoint(
                             &mut state,
                             &mut key,
                             &mut seq,
@@ -615,7 +628,20 @@ pub trait InputEventQueuer {
                             i,
                             &mut consumed,
                             &mut have_escape_prefix,
-                        );
+                        ) {
+                            ControlFlow::Continue(codepoint_complete) => {
+                                if codepoint_complete && i + 1 == buffer.len() {
+                                    break true;
+                                }
+                            }
+                            ControlFlow::Break(()) => {
+                                break false;
+                            }
+                        }
+                        i += 1;
+                    };
+                    if !ok {
+                        continue;
                     }
                     return if let Some(key) = key {
                         CharEvent::from_key_seq(key, seq)
@@ -680,7 +706,7 @@ pub trait InputEventQueuer {
         i: usize,
         consumed: &mut usize,
         have_escape_prefix: &mut bool,
-    ) {
+    ) -> ControlFlow<(), bool> {
         let mut res: char = '\0';
         let read_byte = buffer[i];
         if crate::libc::MB_CUR_MAX() == 1 {
@@ -689,7 +715,7 @@ pub trait InputEventQueuer {
             // the single-byte locale is compatible with Unicode upper-ASCII.
             res = read_byte.into();
             out_seq.push(res);
-            return;
+            return ControlFlow::Continue(true);
         }
         let mut codepoint = u32::from(res);
         let sz = unsafe {
@@ -705,17 +731,17 @@ pub trait InputEventQueuer {
                 FLOG!(reader, "Illegal input");
                 *consumed += 1;
                 self.push_front(CharEvent::from_check_exit());
-                return;
+                return ControlFlow::Break(());
             }
             -2 => {
                 // Sequence not yet complete.
-                return;
+                return ControlFlow::Continue(false);
             }
             0 => {
                 // Actual nul char.
                 *consumed += 1;
                 out_seq.push('\0');
-                return;
+                return ControlFlow::Continue(true);
             }
             _ => (),
         }
@@ -728,13 +754,14 @@ pub trait InputEventQueuer {
                 }
                 *consumed += 1;
                 out_seq.push(res);
-                return;
+                return ControlFlow::Continue(true);
             }
         }
         for &b in &buffer[*consumed..i] {
             out_seq.push(encode_byte_to_char(b));
             *consumed += 1;
         }
+        ControlFlow::Continue(true)
     }
 
     fn parse_csi(&mut self, buffer: &mut Vec<u8>) -> Option<Key> {

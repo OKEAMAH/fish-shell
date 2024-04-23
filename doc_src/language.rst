@@ -168,6 +168,7 @@ Each stream has a number called the file descriptor (FD): 0 for stdin, 1 for std
 The destination of a stream can be changed using something called *redirection*. For example, ``echo hello > output.txt``, redirects the standard output of the ``echo`` command to a text file.
 
 - To read standard input from a file, use ``<SOURCE_FILE``.
+- To read standard input from a file or /dev/null if it can't be read, use ``<?SOURCE_FILE``.
 - To write standard output to a file, use ``>DESTINATION``.
 - To write standard error to a file, use ``2>DESTINATION``. [#]_
 - To append standard output to a file, use ``>>DESTINATION_FILE``.
@@ -187,6 +188,8 @@ Any arbitrary file descriptor can be used in a redirection by prefixing the redi
 - To redirect the input of descriptor N, use ``N<DESTINATION``.
 - To redirect the output of descriptor N, use ``N>DESTINATION``.
 - To append the output of descriptor N to a file, use ``N>>DESTINATION_FILE``.
+
+File descriptors cannot be used with a ``<?`` input redirection, only a regular ``<`` one.
 
 For example::
 
@@ -212,6 +215,9 @@ For example::
       echo stdout
       echo stderr >&2 # <- this goes to stderr!
   end >/dev/null # ignore stdout, so this prints "stderr"
+
+  # print all lines that include "foo" from myfile, or nothing if it doesn't exist.
+  string match '*foo*' <?myfile
 
 It is an error to redirect a builtin, function, or block to a file descriptor above 2. However this is supported for external commands.
 
@@ -283,7 +289,7 @@ Example::
 
 will start the emacs text editor in the background. :doc:`fg <cmds/fg>` can be used to bring it into the foreground again when needed.
 
-Most programs allow you to suspend the program's execution and return control to fish by pressing :kbd:`Control`\ +\ :kbd:`Z` (also referred to as ``^Z``). Once back at the fish commandline, you can start other programs and do anything you want. If you then want you can go back to the suspended command by using the :doc:`fg <cmds/fg>` (foreground) command.
+Most programs allow you to suspend the program's execution and return control to fish by pressing :kbd:`ctrl-z` (also referred to as ``^Z``). Once back at the fish commandline, you can start other programs and do anything you want. If you then want you can go back to the suspended command by using the :doc:`fg <cmds/fg>` (foreground) command.
 
 If you instead want to put a suspended job into the background, use the :doc:`bg <cmds/bg>` command.
 
@@ -2010,6 +2016,7 @@ You can see the current list of features via ``status features``::
     regex-easyesc           on  3.1 string replace -r needs fewer \\'s
     ampersand-nobg-in-token on  3.4 & only backgrounds if followed by a separating character
     remove-percent-self     off 3.8 %self is no longer expanded (use $fish_pid)
+    test-require-arg        off 3.8 builtin test requires an argument
 
 Here is what they mean:
 
@@ -2018,6 +2025,7 @@ Here is what they mean:
 - ``regex-easyesc`` was introduced in 3.1. It makes it so the replacement expression in ``string replace -r`` does one fewer round of escaping. Before, to escape a backslash you would have to use ``string replace -ra '([ab])' '\\\\\\\\$1'``. After, just ``'\\\\$1'`` is enough. Check your ``string replace`` calls if you use this anywhere.
 - ``ampersand-nobg-in-token`` was introduced in fish 3.4. It makes it so a ``&`` i no longer interpreted as the backgrounding operator in the middle of a token, so dealing with URLs becomes easier. Either put spaces or a semicolon after the ``&``. This is recommended formatting anyway, and ``fish_indent`` will have done it for you already.
 - ``remove-percent-self`` turns off the special ``%self`` expansion. It was introduced in 3.8. To get fish's pid, you can use the :envvar:`fish_pid` variable.
+- ``test-require-arg`` removes :doc:`builtin test <cmds/test>`'s one-argument form (``test "string"``. It was introduced in 3.8. To test if a string is non-empty, use ``test -n "string"``. If disabled, any call to ``test`` that would change sends a :ref:`debug message <debugging-fish>` of category "deprecated-test", so starting fish with ``fish --debug=deprecated-test`` can be used to find offending calls.
 
 
 These changes are introduced off by default. They can be enabled on a per session basis::
@@ -2107,7 +2115,7 @@ For more information on how to define new event handlers, see the documentation 
 Debugging fish scripts
 ----------------------
 
-Fish includes basic built-in debugging facilities that allow you to stop execution of a script at an arbitrary point. When this happens you are presented with an interactive prompt where you can execute any fish command to inspect or change state (there are no debug commands as such). For example, you can check or change the value of any variables using :doc:`printf <cmds/printf>` and :doc:`set <cmds/set>`. As another example, you can run :doc:`status print-stack-trace <cmds/status>` to see how the current breakpoint was reached. To resume normal execution of the script, simply type :doc:`exit <cmds/exit>` or :kbd:`Control`\ +\ :kbd:`D`.
+Fish includes basic built-in debugging facilities that allow you to stop execution of a script at an arbitrary point. When this happens you are presented with an interactive prompt where you can execute any fish command to inspect or change state (there are no debug commands as such). For example, you can check or change the value of any variables using :doc:`printf <cmds/printf>` and :doc:`set <cmds/set>`. As another example, you can run :doc:`status print-stack-trace <cmds/status>` to see how the current breakpoint was reached. To resume normal execution of the script, simply type :doc:`exit <cmds/exit>` or :kbd:`ctrl-d`.
 
 To start a debug session simply insert the :doc:`builtin command <cmds/breakpoint>` ``breakpoint`` at the point in a function or script where you wish to gain control, then run the function or script. Also, the default action of the ``TRAP`` signal is to call this builtin, meaning a running script can be actively debugged by sending it the ``TRAP`` signal (``kill -s TRAP <PID>``). There is limited support for interactively setting or modifying breakpoints from this debug prompt: it is possible to insert new breakpoints in (or remove old ones from) other functions by using the ``funced`` function to edit the definition of a function, but it is not possible to add or remove a breakpoint from the function/script currently loaded and being executed.
 

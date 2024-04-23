@@ -120,6 +120,8 @@ bitflags! {
         const NO_TILDE = 1 << 2;
         /// Replace non-printable control characters with Unicode symbols.
         const SYMBOLIC = 1 << 3;
+        /// Escape : and =
+        const SEPARATORS = 1 << 4;
     }
 }
 
@@ -180,6 +182,7 @@ pub fn escape_string(s: &wstr, style: EscapeStringStyle) -> WString {
 /// Escape a string in a fashion suitable for using in fish script.
 fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
     let escape_printables = !flags.contains(EscapeFlags::NO_PRINTABLES);
+    let escape_separators = flags.contains(EscapeFlags::SEPARATORS);
     let no_quoted = flags.contains(EscapeFlags::NO_QUOTED);
     let no_tilde = flags.contains(EscapeFlags::NO_TILDE);
     let no_qmark = feature_test(FeatureFlag::qmark_noglob);
@@ -290,6 +293,13 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
             ANY_STRING_RECURSIVE => {
                 out += L!("**");
             }
+            ':' | '=' => {
+                if escape_separators {
+                    need_escape = true;
+                    out.push('\\');
+                }
+                out.push(c);
+            }
 
             '&' | '$' | ' ' | '#' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}' | '?' | '*'
             | '|' | ';' | '"' | '%' | '~' => {
@@ -308,33 +318,30 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
                 }
                 out.push(c);
             }
-            _ => {
+            '\x00'..='\x19' => {
                 let cval = u32::from(c);
-                if cval < 32 {
-                    need_escape = true;
-                    need_complex_escape = true;
+                need_escape = true;
+                need_complex_escape = true;
 
-                    if symbolic {
-                        out.push(char::from_u32(0x2400 + cval).unwrap());
-                        continue;
-                    }
-
-                    if cval < 27 && cval != 0 {
-                        out.push('\\');
-                        out.push('c');
-                        out.push(char::from_u32(u32::from(b'a') + cval - 1).unwrap());
-                        continue;
-                    }
-
-                    let nibble = cval % 16;
-                    out.push('\\');
-                    out.push('x');
-                    out.push(if cval > 15 { '1' } else { '0' });
-                    out.push(char::from_digit(nibble, 16).unwrap());
-                } else {
-                    out.push(c);
+                if symbolic {
+                    out.push(char::from_u32(0x2400 + cval).unwrap());
+                    continue;
                 }
+
+                if cval < 27 && cval != 0 {
+                    out.push('\\');
+                    out.push('c');
+                    out.push(char::from_u32(u32::from(b'a') + cval - 1).unwrap());
+                    continue;
+                }
+
+                let nibble = cval % 16;
+                out.push('\\');
+                out.push('x');
+                out.push(if cval > 15 { '1' } else { '0' });
+                out.push(char::from_digit(nibble, 16).unwrap());
             }
+            _ => out.push(c),
         }
     }
 

@@ -903,6 +903,19 @@ pub fn reader_schedule_prompt_repaint() {
 
 pub fn reader_execute_readline_cmd(ch: CharEvent) {
     if let Some(data) = current_data() {
+        let CharEvent::Readline(readline_cmd_evt) = &ch else {
+            panic!()
+        };
+        if matches!(
+            readline_cmd_evt.cmd,
+            ReadlineCmd::ClearScreenAndRepaint
+                | ReadlineCmd::RepaintMode
+                | ReadlineCmd::Repaint
+                | ReadlineCmd::ForceRepaint
+        ) {
+            data.inputter.queue_char(ch);
+            return;
+        }
         if data.rls.is_none() {
             data.rls = Some(ReadlineLoopState::new());
         }
@@ -5030,7 +5043,7 @@ fn try_expand_wildcard(
 
 /// Test if the specified character in the specified string is backslashed. pos may be at the end of
 /// the string, which indicates if there is a trailing backslash.
-fn is_backslashed(s: &wstr, pos: usize) -> bool {
+pub(crate) fn is_backslashed(s: &wstr, pos: usize) -> bool {
     // note pos == str.size() is OK.
     if pos > s.len() {
         return false;
@@ -5080,7 +5093,7 @@ fn replace_line_at_cursor(
     text[..start].to_owned() + replacement + &text[end..]
 }
 
-fn get_quote(cmd_str: &wstr, len: usize) -> Option<char> {
+pub(crate) fn get_quote(cmd_str: &wstr, len: usize) -> Option<char> {
     let cmd = cmd_str.as_char_slice();
     let mut i = 0;
     while i < cmd.len() {
