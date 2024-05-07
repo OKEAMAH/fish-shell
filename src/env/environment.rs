@@ -16,8 +16,8 @@ use crate::libc::{stdout_stream, C_PATH_BSHELL, _PATH_BSHELL};
 use crate::nix::{geteuid, getpid, isatty};
 use crate::null_terminated_array::OwningNullTerminatedArray;
 use crate::path::{
-    path_emit_config_directory_messages, path_get_config, path_get_data, path_make_canonical,
-    paths_are_same_file,
+    path_emit_config_directory_messages, path_get_cache, path_get_config, path_get_data,
+    path_make_canonical, paths_are_same_file,
 };
 use crate::proc::is_interactive_session;
 use crate::termsize;
@@ -188,7 +188,7 @@ impl EnvStack {
         self.inner.lock()
     }
 
-    /// \return whether we are the principal stack.
+    /// Return whether we are the principal stack.
     pub fn is_principal(&self) -> bool {
         std::ptr::eq(self, Self::principal().as_ref().get_ref())
     }
@@ -275,7 +275,7 @@ impl EnvStack {
     /// this is a user request, read-only variables can not be removed. The mode may also specify
     /// the scope of the variable that should be erased.
     ///
-    /// \return the set result.
+    /// Return the set result.
     pub fn remove(&self, key: &wstr, mode: EnvMode) -> EnvStackSetResult {
         let ret = self.lock().remove(key, mode);
         #[allow(clippy::collapsible_if)]
@@ -327,9 +327,9 @@ impl EnvStack {
     }
 
     /// Synchronizes universal variable changes.
-    /// If \p always is set, perform synchronization even if there's no pending changes from this
+    /// If `always` is set, perform synchronization even if there's no pending changes from this
     /// instance (that is, look for changes from other fish instances).
-    /// \return a list of events for changed variables.
+    /// Return a list of events for changed variables.
     #[allow(clippy::vec_box)]
     pub fn universal_sync(&self, always: bool) -> Vec<Event> {
         if UVAR_SCOPE_IS_GLOBAL.load() {
@@ -429,6 +429,7 @@ const FISH_HELPDIR_VAR: &wstr = L!("__fish_help_dir");
 const FISH_BIN_DIR: &wstr = L!("__fish_bin_dir");
 const FISH_CONFIG_DIR: &wstr = L!("__fish_config_dir");
 const FISH_USER_DATA_DIR: &wstr = L!("__fish_user_data_dir");
+const FISH_CACHE_DIR: &wstr = L!("__fish_cache_dir");
 
 /// Maximum length of hostname. Longer hostnames are truncated.
 const HOSTNAME_LEN: usize = 255;
@@ -648,6 +649,12 @@ pub fn env_init(paths: Option<&ConfigPaths>, do_uvars: bool, default_paths: bool
         user_data_dir.unwrap_or_default(),
     );
 
+    let user_cache_dir = path_get_cache();
+    vars.set_one(
+        FISH_CACHE_DIR,
+        EnvMode::GLOBAL,
+        user_cache_dir.unwrap_or_default(),
+    );
     // Set up a default PATH
     setup_path();
 

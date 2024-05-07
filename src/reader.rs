@@ -60,7 +60,7 @@ use crate::fd_readable_set::poll_fd_readable;
 use crate::fds::{make_fd_blocking, wopen_cloexec, AutoCloseFd};
 use crate::flog::{FLOG, FLOGF};
 #[allow(unused_imports)]
-use crate::future::{IsOkAnd, IsSomeAnd};
+use crate::future::IsSomeAnd;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::{
     autosuggest_validate_from_history, highlight_shell, HighlightRole, HighlightSpec,
@@ -86,6 +86,7 @@ use crate::pager::{PageRendering, Pager, SelectionMotion};
 use crate::parse_constants::SourceRange;
 use crate::parse_constants::{ParseTreeFlags, ParserTestErrorBits};
 use crate::parse_tree::ParsedSource;
+use crate::parse_util::MaybeParentheses;
 use crate::parse_util::SPACES_PER_INDENT;
 use crate::parse_util::{
     parse_util_cmdsubst_extent, parse_util_compute_indents, parse_util_contains_wildcards,
@@ -220,7 +221,7 @@ pub fn current_data() -> Option<&'static mut ReaderData> {
 pub use current_data as reader_current_data;
 
 /// Add a new reader to the reader stack.
-/// \return a shared pointer to it.
+/// Return a shared pointer to it.
 fn reader_push_ret(
     parser: &Parser,
     history_name: &wstr,
@@ -239,8 +240,8 @@ fn reader_push_ret(
     data
 }
 
-/// Push a new reader environment controlled by \p conf, using the given history name.
-/// If \p history_name is empty, then save history in-memory only; do not write it to disk.
+/// Push a new reader environment controlled by `conf`, using the given history name.
+/// If `history_name` is empty, then save history in-memory only; do not write it to disk.
 pub fn reader_push(parser: &Parser, history_name: &wstr, conf: ReaderConfig) {
     // Public variant which discards the return value.
     reader_push_ret(parser, history_name, conf);
@@ -625,8 +626,8 @@ fn read_i(parser: &Parser) -> i32 {
             continue;
         }
 
-        data.update_buff_pos(EditableLineTag::Commandline, Some(0));
         data.command_line.clear();
+        data.update_buff_pos(EditableLineTag::Commandline, None);
         data.command_line_changed(EditableLineTag::Commandline);
         data.screen.write_bytes(b"\x1b]133;C\x07");
         event::fire_generic(parser, L!("fish_preexec").to_owned(), vec![command.clone()]);
@@ -1341,7 +1342,7 @@ pub fn combine_command_and_autosuggestion(cmdline: &wstr, autosuggestion: &wstr)
 }
 
 impl ReaderData {
-    /// \return true if the command line has changed and repainting is needed. If \p colors is not
+    /// Return true if the command line has changed and repainting is needed. If `colors` is not
     /// null, then also return true if the colors have changed.
     fn is_repaint_needed(&self, mcolors: Option<&[HighlightSpec]>) -> bool {
         // Note: this function is responsible for detecting all of the ways that the command line may
@@ -1393,7 +1394,7 @@ impl ReaderData {
     }
 
     /// Generate a new layout data from the current state of the world.
-    /// If \p mcolors has a value, then apply it; otherwise extend existing colors.
+    /// If `mcolors` has a value, then apply it; otherwise extend existing colors.
     fn make_layout_data(&self) -> LayoutData {
         let mut result = LayoutData::default();
         let focused_on_pager = self.active_edit_line_tag() == EditableLineTag::SearchField;
@@ -1416,14 +1417,14 @@ impl ReaderData {
     }
 
     /// Generate a new layout data from the current state of the world, and paint with it.
-    /// If \p mcolors has a value, then apply it; otherwise extend existing colors.
+    /// If `mcolors` has a value, then apply it; otherwise extend existing colors.
     fn layout_and_repaint(&mut self, reason: &wstr) {
         self.rendered_layout = self.make_layout_data();
         self.paint_layout(reason);
     }
 
     /// Paint the last rendered layout.
-    /// \p reason is used in FLOG to explain why.
+    /// `reason` is used in FLOG to explain why.
     fn paint_layout(&mut self, reason: &wstr) {
         FLOGF!(reader_render, "Repainting from %ls", reason);
         let data = &self.rendered_layout;
@@ -1784,7 +1785,7 @@ impl ReaderData {
 
 impl ReaderData {
     /// Read a command to execute, respecting input bindings.
-    /// \return the command, or none if we were asked to cancel (e.g. SIGHUP).
+    /// Return the command, or none if we were asked to cancel (e.g. SIGHUP).
     fn readline(&mut self, nchars: Option<NonZeroUsize>) -> Option<WString> {
         self.rls = Some(ReadlineLoopState::new());
 
@@ -1949,7 +1950,7 @@ impl ReaderData {
     }
 
     /// Read normal characters, inserting them into the command line.
-    /// \return the next unhandled event.
+    /// Return the next unhandled event.
     fn read_normal_chars(&mut self) -> Option<CharEvent> {
         let mut event_needing_handling = None;
         let limit = std::cmp::min(
@@ -2569,7 +2570,17 @@ impl ReaderData {
                 let search_string = if !self.history_search.active()
                     || self.history_search.search_string().is_empty()
                 {
-                    parse_util_escape_wildcards(self.command_line.line_at_cursor())
+                    let cmdsub = parse_util_cmdsubst_extent(
+                        self.command_line.text(),
+                        self.command_line.position(),
+                    );
+                    let cmdsub = &self.command_line.text()[cmdsub];
+                    let needle = if !cmdsub.contains('\n') {
+                        cmdsub
+                    } else {
+                        self.command_line.line_at_cursor()
+                    };
+                    parse_util_escape_wildcards(needle)
                 } else {
                     // If we have an actual history search already going, reuse that term
                     // - this is if the user looks around a bit and decides to switch to the pager.
@@ -2579,11 +2590,20 @@ impl ReaderData {
             }
             rl::HistoryPagerDelete => {
                 // Also applies to ordinary history search.
-                if !self.history_search.is_at_end() {
-                    self.history.remove(self.history_search.current_result());
+                let is_history_search = !self.history_search.is_at_end();
+                if is_history_search || !self.autosuggestion.is_empty() {
+                    self.history.remove(if is_history_search {
+                        self.history_search.current_result()
+                    } else {
+                        &self.autosuggestion.text
+                    });
                     self.history.save();
-                    self.history_search.handle_deletion();
-                    self.update_command_line_from_history_search();
+                    if is_history_search {
+                        self.history_search.handle_deletion();
+                        self.update_command_line_from_history_search();
+                    } else {
+                        self.autosuggestion.clear();
+                    }
                     self.inputter.function_set_status(true);
                     return;
                 }
@@ -3096,13 +3116,6 @@ impl ReaderData {
                     self.inputter.function_set_status(false);
                 }
             }
-            rl::ExpandAbbrBacktrack => {
-                if self.expand_abbreviation_at_cursor(2) {
-                    self.inputter.function_set_status(true);
-                } else {
-                    self.inputter.function_set_status(false);
-                }
-            }
             rl::Undo | rl::Redo => {
                 let (elt, el) = self.active_edit_line_mut();
                 let ok = if c == rl::Undo { el.undo() } else { el.redo() };
@@ -3172,7 +3185,7 @@ fn text_ends_in_comment(text: &wstr) -> bool {
 impl ReaderData {
     // Handle readline_cmd_t::execute. This may mean inserting a newline if the command is
     // unfinished. It may also set 'finished' and 'cmd' inside the rls.
-    // \return true on success, false if we got an error, in which case the caller should fire the
+    // Return true on success, false if we got an error, in which case the caller should fire the
     // error event.
     fn handle_execute(&mut self) -> bool {
         // Evaluate. If the current command is unfinished, or if the charater is escaped
@@ -3251,7 +3264,7 @@ impl ReaderData {
 
     // Expand abbreviations before execution.
     // Replace the command line with any abbreviations as needed.
-    // \return the test result, which may be incomplete to insert a newline, or an error.
+    // Return the test result, which may be incomplete to insert a newline, or an error.
     fn expand_for_execute(&mut self) -> Result<(), ParserTestErrorBits> {
         // Expand abbreviations at the cursor.
         // The first expansion is "user visible" and enters into history.
@@ -3685,7 +3698,7 @@ fn reader_interactive_destroy() {
         .set_color(RgbColor::RESET, RgbColor::RESET);
 }
 
-/// \return whether fish is currently unwinding the stack in preparation to exit.
+/// Return whether fish is currently unwinding the stack in preparation to exit.
 pub fn fish_is_unwinding_for_exit() -> bool {
     let exit_state = EXIT_STATE.load(Ordering::Relaxed);
     let exit_state: ExitState = unsafe { std::mem::transmute(exit_state) };
@@ -3907,7 +3920,7 @@ impl Autosuggestion {
         self.search_string.clear();
     }
 
-    // \return whether we have empty text.
+    // Return whether we have empty text.
     fn is_empty(&self) -> bool {
         self.text.is_empty()
     }
@@ -4425,7 +4438,7 @@ impl ReaderData {
 }
 
 /// Expand an abbreviation replacer, which may mean running its function.
-/// \return the replacement, or none to skip it. This may run fish script!
+/// Return the replacement, or none to skip it. This may run fish script!
 fn expand_replacer(
     range: SourceRange,
     token: &wstr,
@@ -4480,7 +4493,7 @@ fn expand_replacer(
     ))
 }
 
-// Extract all the token ranges in \p str, along with whether they are a command.
+// Extract all the token ranges in `str`, along with whether they are a command.
 // Tokens containing command substitutions are skipped; this ensures tokens are non-overlapping.
 struct PositionedToken {
     range: SourceRange,
@@ -4520,29 +4533,26 @@ fn extract_tokens(s: &wstr) -> Vec<PositionedToken> {
 
         // If we have command subs, then we don't include this token; instead we recurse.
         let mut has_cmd_subs = false;
-        let mut cmdsub_contents = L!("");
         let mut cmdsub_cursor = range.start();
-        let mut cmdsub_start = 0;
-        let mut cmdsub_end = 0;
-        while parse_util_locate_cmdsubst_range(
-            s,
-            &mut cmdsub_cursor,
-            Some(&mut cmdsub_contents),
-            &mut cmdsub_start,
-            &mut cmdsub_end,
-            /*accept_incomplete=*/ true,
-            None,
-            None,
-        ) > 0
-        {
-            if cmdsub_start >= range.end() {
-                break;
-            }
-            has_cmd_subs = true;
-            for mut t in extract_tokens(cmdsub_contents) {
-                // cmdsub_start is the open paren; the contents start one after it.
-                t.range.start += u32::try_from(cmdsub_start + 1).unwrap();
-                result.push(t);
+        loop {
+            match parse_util_locate_cmdsubst_range(
+                s,
+                &mut cmdsub_cursor,
+                /*accept_incomplete=*/ true,
+                None,
+                None,
+            ) {
+                MaybeParentheses::Error | MaybeParentheses::None => break,
+                MaybeParentheses::CommandSubstitution(parens) => {
+                    if parens.start() >= range.end() {
+                        break;
+                    }
+                    has_cmd_subs = true;
+                    for mut t in extract_tokens(&s[parens.command()]) {
+                        t.range.start += u32::try_from(parens.command().start).unwrap();
+                        result.push(t);
+                    }
+                }
             }
         }
 
@@ -4560,7 +4570,7 @@ fn extract_tokens(s: &wstr) -> Vec<PositionedToken> {
 
 /// Expand at most one abbreviation at the given cursor position, updating the position if the
 /// abbreviation wants to move the cursor. Use the parser to run any abbreviations which want
-/// function calls. \return none if no abbreviations were expanded, otherwise the resulting
+/// function calls. Return none if no abbreviations were expanded, otherwise the resulting
 /// replacement.
 pub fn reader_expand_abbreviation_at_cursor(
     cmdline: &wstr,
@@ -4965,7 +4975,7 @@ impl ReaderData {
 }
 
 /// Check if we should exit the reader loop.
-/// \return true if we should exit.
+/// Return true if we should exit.
 pub fn check_exit_loop_maybe_warning(data: Option<&mut ReaderData>) -> bool {
     // sighup always forces exit.
     if reader_received_sighup() {
@@ -4987,8 +4997,8 @@ pub fn check_exit_loop_maybe_warning(data: Option<&mut ReaderData>) -> bool {
     true
 }
 
-/// Given that the user is tab-completing a token \p wc whose cursor is at \p pos in the token,
-/// try expanding it as a wildcard, populating \p result with the expanded string.
+/// Given that the user is tab-completing a token `wc` whose cursor is at `pos` in the token,
+/// try expanding it as a wildcard, populating `result` with the expanded string.
 fn try_expand_wildcard(
     parser: &Parser,
     wc: WString,
@@ -5153,7 +5163,7 @@ pub(crate) fn get_quote(cmd_str: &wstr, len: usize) -> Option<char> {
 /// \param append_only Whether we can only append to the command line, or also modify previous
 /// characters. This is used to determine whether we go inside a trailing quote.
 ///
-/// \return The completed string
+/// Return The completed string
 pub fn completion_apply_to_command_line(
     val_str: &wstr,
     flags: CompleteFlags,
@@ -5173,7 +5183,13 @@ pub fn completion_apply_to_command_line(
 
     if do_replace_line {
         assert!(!do_escape, "unsupported completion flag");
-        return replace_line_at_cursor(command_line, inout_cursor_pos, val_str);
+        let cmdsub = parse_util_cmdsubst_extent(command_line, cursor_pos);
+        return if !command_line[cmdsub.clone()].contains('\n') {
+            *inout_cursor_pos = cmdsub.start + val_str.len();
+            command_line[..cmdsub.start].to_owned() + val_str + &command_line[cmdsub.end..]
+        } else {
+            replace_line_at_cursor(command_line, inout_cursor_pos, val_str)
+        };
     }
 
     let mut escape_flags = EscapeFlags::empty();

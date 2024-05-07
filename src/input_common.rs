@@ -8,7 +8,6 @@ use crate::env::{EnvStack, Environment};
 use crate::fd_readable_set::FdReadableSet;
 use crate::flog::FLOG;
 use crate::global_safety::RelaxedAtomicBool;
-use crate::input::KeyNameStyle;
 use crate::key::{
     self, alt, canonicalize_control_char, canonicalize_keyed_control_char, function_key, shift,
     Key, Modifiers,
@@ -114,7 +113,6 @@ pub enum ReadlineCmd {
     FuncAnd,
     FuncOr,
     ExpandAbbr,
-    ExpandAbbrBacktrack,
     DeleteOrExit,
     Exit,
     CancelCommandline,
@@ -282,7 +280,8 @@ impl CharEvent {
 /// Time in milliseconds to wait for another byte to be available for reading
 /// after \x1B is read before assuming that escape key was pressed, and not an
 /// escape sequence.
-pub(crate) static WAIT_ON_ESCAPE_MS: AtomicUsize = AtomicUsize::new(0);
+const WAIT_ON_ESCAPE_DEFAULT: usize = 30;
+static WAIT_ON_ESCAPE_MS: AtomicUsize = AtomicUsize::new(WAIT_ON_ESCAPE_DEFAULT);
 
 const WAIT_ON_SEQUENCE_KEY_INFINITE: usize = usize::MAX;
 static WAIT_ON_SEQUENCE_KEY_MS: AtomicUsize = AtomicUsize::new(WAIT_ON_SEQUENCE_KEY_INFINITE);
@@ -385,7 +384,7 @@ fn readb(in_fd: RawFd, blocking: bool) -> ReadbResult {
 pub fn update_wait_on_escape_ms(vars: &EnvStack) {
     let fish_escape_delay_ms = vars.get_unless_empty(L!("fish_escape_delay_ms"));
     let Some(fish_escape_delay_ms) = fish_escape_delay_ms else {
-        WAIT_ON_ESCAPE_MS.store(0, Ordering::Relaxed);
+        WAIT_ON_ESCAPE_MS.store(WAIT_ON_ESCAPE_DEFAULT, Ordering::Relaxed);
         return;
     };
     let fish_escape_delay_ms = fish_escape_delay_ms.as_string();
@@ -550,7 +549,7 @@ fn parse_mask(mask: u32) -> Modifiers {
 /// A trait which knows how to produce a stream of input events.
 /// Note this is conceptually a "base class" with override points.
 pub trait InputEventQueuer {
-    /// \return the next event in the queue, or none if the queue is empty.
+    /// Return the next event in the queue, or none if the queue is empty.
     fn try_pop(&mut self) -> Option<CharEvent> {
         self.get_queue_mut().pop_front()
     }
@@ -1027,16 +1026,8 @@ pub trait InputEventQueuer {
         Some(key)
     }
 
-    fn readch_timed_esc(&mut self, style: &KeyNameStyle) -> Result<CharEvent, bool> {
-        let wait_ms = WAIT_ON_ESCAPE_MS.load(Ordering::Relaxed);
-        if wait_ms == 0 {
-            if *style == KeyNameStyle::Plain {
-                return self.readch_timed_sequence_key().ok_or(true);
-            }
-            return Err(false); // Not timed out
-        }
+    fn readch_timed_esc(&mut self) -> Option<CharEvent> {
         self.readch_timed(WAIT_ON_ESCAPE_MS.load(Ordering::Relaxed))
-            .ok_or(true) // Timed out
     }
 
     fn readch_timed_sequence_key(&mut self) -> Option<CharEvent> {
@@ -1049,7 +1040,7 @@ pub trait InputEventQueuer {
 
     /// Like readch(), except it will wait at most wait_time_ms milliseconds for a
     /// character to be available for reading.
-    /// \return None on timeout, the event on success.
+    /// Return None on timeout, the event on success.
     fn readch_timed(&mut self, wait_time_ms: usize) -> Option<CharEvent> {
         if let Some(evt) = self.try_pop() {
             return Some(evt);
@@ -1198,7 +1189,7 @@ pub trait InputEventQueuer {
     /// The default does nothing.
     fn uvar_change_notified(&mut self) {}
 
-    /// \return if we have any lookahead.
+    /// Return if we have any lookahead.
     fn has_lookahead(&self) -> bool {
         !self.get_queue().is_empty()
     }

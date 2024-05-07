@@ -23,7 +23,6 @@ use libc::{EIO, O_WRONLY, SIGTTOU, SIG_IGN, STDERR_FILENO, STDIN_FILENO, STDOUT_
 use once_cell::sync::OnceCell;
 use std::env;
 use std::ffi::{CStr, CString, OsStr, OsString};
-use std::io::{Read, Write};
 use std::mem;
 use std::ops::{Deref, DerefMut};
 use std::os::unix::prelude::*;
@@ -122,6 +121,8 @@ bitflags! {
         const SYMBOLIC = 1 << 3;
         /// Escape : and =
         const SEPARATORS = 1 << 4;
+        /// Escape ,
+        const COMMA = 1 << 5;
     }
 }
 
@@ -183,6 +184,7 @@ pub fn escape_string(s: &wstr, style: EscapeStringStyle) -> WString {
 fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
     let escape_printables = !flags.contains(EscapeFlags::NO_PRINTABLES);
     let escape_separators = flags.contains(EscapeFlags::SEPARATORS);
+    let escape_comma = flags.contains(EscapeFlags::COMMA);
     let no_quoted = flags.contains(EscapeFlags::NO_QUOTED);
     let no_tilde = flags.contains(EscapeFlags::NO_TILDE);
     let no_qmark = feature_test(FeatureFlag::qmark_noglob);
@@ -295,6 +297,13 @@ fn escape_string_script(input: &wstr, flags: EscapeFlags) -> WString {
             }
             ':' | '=' => {
                 if escape_separators {
+                    need_escape = true;
+                    out.push('\\');
+                }
+                out.push(c);
+            }
+            ',' => {
+                if escape_comma {
                     need_escape = true;
                     out.push('\\');
                 }
@@ -1087,7 +1096,7 @@ pub static EMPTY_STRING: WString = WString::new();
 pub static EMPTY_STRING_LIST: Vec<WString> = vec![];
 
 /// A function type to check for cancellation.
-/// \return true if execution should cancel.
+/// Return true if execution should cancel.
 /// todo!("Maybe remove the box? It is only needed for get_bg_context.")
 pub type CancelChecker = Box<dyn Fn() -> bool>;
 
@@ -1240,7 +1249,7 @@ pub fn wcs2zstring(input: &wstr) -> CString {
     CString::new(until_nul).unwrap()
 }
 
-/// Like wcs2string, but appends to \p receiver instead of returning a new string.
+/// Like wcs2string, but appends to `receiver` instead of returning a new string.
 pub fn wcs2string_appending(output: &mut Vec<u8>, input: &wstr) {
     output.reserve(input.len());
     wcs2string_callback(input, |buff| {
@@ -1249,7 +1258,7 @@ pub fn wcs2string_appending(output: &mut Vec<u8>, input: &wstr) {
     });
 }
 
-/// \return the count of initial characters in \p in which are ASCII.
+/// Return the count of initial characters in `in` which are ASCII.
 fn count_ascii_prefix(inp: &[u8]) -> usize {
     // The C++ version had manual vectorization.
     inp.iter().take_while(|c| c.is_ascii()).count()
@@ -1283,7 +1292,7 @@ pub fn format_size(mut sz: i64) -> WString {
             if sz < (1024 * 1024) || i == sz_names.len() - 1 {
                 let isz = sz / 1024;
                 if isz > 9 {
-                    result += &sprintf!("%ld%ls", isz, *sz_name)[..];
+                    result += &sprintf!("%lld%ls", isz, *sz_name)[..];
                 } else {
                     result += &sprintf!("%.1f%ls", sz as f64 / 1024.0, *sz_name)[..];
                 }
@@ -1480,7 +1489,7 @@ fn can_be_encoded(wc: char) -> bool {
 }
 
 /// Call read, blocking and repeating on EINTR. Exits on EAGAIN.
-/// \return the number of bytes read, or 0 on EOF, or an error.
+/// Return the number of bytes read, or 0 on EOF, or an error.
 pub fn read_blocked(fd: RawFd, buf: &mut [u8]) -> nix::Result<usize> {
     loop {
         let res = nix::unistd::read(fd, buf);
@@ -1544,50 +1553,7 @@ pub fn read_loop<Fd: AsRawFd>(fd: &Fd, buf: &mut [u8]) -> std::io::Result<usize>
     }
 }
 
-/// Provides write methods for types implementing [`Write`] that continue on
-/// EINTR or EAGAIN. Like [`Write::write_all`] but also handles EAGAIN.
-trait LoopedWrite {
-    #[inline(always)]
-    fn write_retry(&mut self, buf: &[u8]) -> std::io::Result<usize>
-    where
-        Self: Write,
-    {
-        let mut written = 0;
-        while written != buf.len() {
-            match self.write(&buf[written..]) {
-                Ok(bytes) => written += bytes,
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(written)
-    }
-}
-
-/// Provides read methods for types implementing [`Read`] that continue on
-/// EINTR or EAGAIN.
-trait LoopedRead {
-    #[inline(always)]
-    fn read_retry(&mut self, buf: &mut [u8]) -> std::io::Result<usize>
-    where
-        Self: Read,
-    {
-        loop {
-            match self.read(buf) {
-                Ok(read) => return Ok(read),
-                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
-                Err(e) => return Err(e),
-            }
-        }
-    }
-}
-
-impl<W: Write> LoopedWrite for W {}
-impl<R: Read> LoopedRead for R {}
-
-/// Write the given paragraph of output, redoing linebreaks to fit \p termsize.
+/// Write the given paragraph of output, redoing linebreaks to fit `termsize`.
 pub fn reformat_for_screen(msg: &wstr, termsize: &Termsize) -> WString {
     let mut buff = WString::new();
 
@@ -2082,8 +2048,8 @@ pub trait Named {
     fn name(&self) -> &'static wstr;
 }
 
-/// \return a pointer to the first entry with the given name, assuming the entries are sorted by
-/// name. \return nullptr if not found.
+/// Return a pointer to the first entry with the given name, assuming the entries are sorted by
+/// name. Return nullptr if not found.
 pub fn get_by_sorted_name<T: Named>(name: &wstr, vals: &'static [T]) -> Option<&'static T> {
     match vals.binary_search_by_key(&name, |val| val.name()) {
         Ok(index) => Some(&vals[index]),

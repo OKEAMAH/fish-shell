@@ -216,10 +216,13 @@ impl RgbColor {
 
     /// Returns the names of all named colors.
     pub fn named_color_names() -> Vec<&'static wstr> {
-        let mut v: Vec<_> = NAMED_COLORS
-            .iter()
-            .filter_map(|&NamedColor { name, hidden, .. }| (!hidden).then_some(name))
-            .collect();
+        // We don't use all the NAMED_COLORS but we also need room for one more.
+        let mut v = Vec::with_capacity(NAMED_COLORS.len());
+        v.extend(
+            NAMED_COLORS
+                .iter()
+                .filter_map(|&NamedColor { name, hidden, .. }| (!hidden).then_some(name)),
+        );
 
         // "normal" isn't really a color and does not have a color palette index or
         // RGB value. Therefore, it does not appear in the NAMED_COLORS table.
@@ -257,34 +260,36 @@ impl RgbColor {
     /// - `FA3`
     /// - `F3A035`
 
+    /// Parses input in the form of `#RGB` or `#RRGGBB` with an optional single leading `#` into
+    /// an instance of [`RgbColor`].
+    ///
+    /// Returns `None` if the input contains invalid hexadecimal characters or is not in the
+    /// expected `#RGB` or `#RRGGBB` formats.
     fn try_parse_rgb(mut s: &wstr) -> Option<Self> {
-        // Skip any leading #.
+        // Skip one leading #
         if s.chars().next()? == '#' {
             s = &s[1..];
         }
 
-        let hex_digit = |i| -> Option<u8> {
-            s.char_at(i)
-                .to_digit(16)
-                .map(|n| n.try_into().expect("hex digit should always be < 256"))
-        };
+        let mut hex = s.chars().map_while(|c| c.to_digit(16).map(|b| b as u8));
 
-        let r;
-        let g;
-        let b;
-        if s.len() == 3 {
-            // Format: FA3
-            r = hex_digit(0)? * 16 + hex_digit(0)?;
-            g = hex_digit(1)? * 16 + hex_digit(1)?;
-            b = hex_digit(2)? * 16 + hex_digit(2)?;
+        let (r, g, b) = if s.len() == 3 {
+            // Expected format: FA3
+            (
+                hex.next().map(|d| d * 16 + d)?,
+                hex.next().map(|d| d * 16 + d)?,
+                hex.next().map(|d| d * 16 + d)?,
+            )
         } else if s.len() == 6 {
-            // Format: F3A035
-            r = hex_digit(0)? * 16 + hex_digit(1)?;
-            g = hex_digit(2)? * 16 + hex_digit(3)?;
-            b = hex_digit(4)? * 16 + hex_digit(5)?;
+            // Expected format: F3A035
+            (
+                hex.next()? * 16 + hex.next()?,
+                hex.next()? * 16 + hex.next()?,
+                hex.next()? * 16 + hex.next()?,
+            )
         } else {
             return None;
-        }
+        };
         Some(RgbColor::from_rgb(r, g, b))
     }
 
@@ -464,5 +469,57 @@ mod tests {
             };
             let _ = color.to_name_index();
         }
+    }
+
+    #[test]
+    fn parse_short_hex_with_hash() {
+        assert_eq!(
+            RgbColor::try_parse_rgb(L!("#F3A")),
+            Some(RgbColor::from_rgb(0xFF, 0x33, 0xAA))
+        );
+    }
+
+    #[test]
+    fn parse_long_hex_with_hash() {
+        assert_eq!(
+            RgbColor::try_parse_rgb(L!("#F3A035")),
+            Some(RgbColor::from_rgb(0xF3, 0xA0, 0x35))
+        );
+    }
+
+    #[test]
+    fn parse_short_hex_without_hash() {
+        assert_eq!(
+            RgbColor::try_parse_rgb(L!("F3A")),
+            Some(RgbColor::from_rgb(0xFF, 0x33, 0xAA))
+        );
+    }
+
+    #[test]
+    fn parse_long_hex_without_hash() {
+        assert_eq!(
+            RgbColor::try_parse_rgb(L!("F3A035")),
+            Some(RgbColor::from_rgb(0xF3, 0xA0, 0x35))
+        );
+    }
+
+    #[test]
+    fn invalid_hex_length() {
+        assert_eq!(RgbColor::try_parse_rgb(L!("#F3A03")), None);
+        assert_eq!(RgbColor::try_parse_rgb(L!("F3A0")), None);
+    }
+
+    #[test]
+    fn invalid_hex_character() {
+        assert_eq!(RgbColor::try_parse_rgb(L!("#GFA")), None);
+        assert_eq!(RgbColor::try_parse_rgb(L!("F3G035")), None);
+    }
+
+    #[test]
+    fn invalid_hash_combinations() {
+        assert_eq!(RgbColor::try_parse_rgb(L!("##F3A")), None);
+        assert_eq!(RgbColor::try_parse_rgb(L!("###F3A035")), None);
+        assert_eq!(RgbColor::try_parse_rgb(L!("F3A#")), None);
+        assert_eq!(RgbColor::try_parse_rgb(L!("#F#3A")), None);
     }
 }

@@ -54,7 +54,7 @@ const LONG_OPTIONS: &[WOption] = &[
     wopt(L!("inherit-variable"), ArgType::RequiredArgument, 'V'),
 ];
 
-/// \return the internal_job_id for a pid, or None if none.
+/// Return the internal_job_id for a pid, or None if none.
 /// This looks through both active and finished jobs.
 fn job_id_for_pid(pid: i32, parser: &Parser) -> Option<u64> {
     if let Some(job) = parser.job_get_from_pid(pid) {
@@ -150,16 +150,14 @@ fn parse_cmd_opts(
                     let pid: i32 = getpid();
                     e = EventDescription::ProcessExit { pid };
                 } else {
-                    let pid = fish_wcstoi(woptarg);
-                    if pid.is_err() || pid.unwrap() < 0 {
+                    let Ok(pid @ 0..) = fish_wcstoi(woptarg) else {
                         streams.err.append(wgettext_fmt!(
                             "%ls: %ls: invalid process id",
                             cmd,
                             woptarg
                         ));
                         return STATUS_INVALID_ARGS;
-                    }
-                    let pid = pid.unwrap();
+                    };
                     if opt == 'p' {
                         e = EventDescription::ProcessExit { pid };
                     } else {
@@ -321,6 +319,15 @@ pub fn function(
             Some((name, vals))
         })
         .collect();
+
+    for named in &opts.named_arguments {
+        if !valid_var_name(&named) {
+            streams
+                .err
+                .append(wgettext_fmt!(BUILTIN_ERR_VARNAME, cmd, named));
+            return STATUS_INVALID_ARGS;
+        }
+    }
 
     // We have what we need to actually define the function.
     let props = function::FunctionProperties {

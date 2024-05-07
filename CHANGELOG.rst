@@ -60,8 +60,14 @@ Notable improvements and fixes
    Any key argument that starts with an ASCII control character (like ``\e`` or ``\cX``) or is up to 3 characters long and not a named key and does not contain ``,`` or ``-`` will be interpreted in the old syntax to keep compatibility for the majority of bindings. This should cover the majority of bindings in use.
 - A new function ``fish_should_add_to_history`` can be overridden to decide whether a command should be added to the history (:issue:`10302`).
 - :kbd:`ctrl-c` during command input no longer prints ``^C`` and a new prompt but merely clears the command line. This restores the behavior from version 2.2. To revert to the old behavior use ``bind ctrl-c __fish_cancel_commandline`` (:issue:`10213`).
+- Undo history is no longer truncated after every command but kept for the lifetime of the shell process.
 - The :kbd:`ctrl-r` history search now uses glob syntax (:issue:`10131`).
-- The :kbd:`ctrl-r` history search now operates only on the line at cursor, making it easier to quickly compose a multi-line command by recalling previous commands.
+- The :kbd:`ctrl-r` history search now operates only on the line or command substitution at cursor, making it easier to combine commands from history.
+- Abbreviations can now be restricted to specific commands. For instance::
+
+    abbr --add --command git back 'reset --hard HEAD^'
+
+  will expand "back" to ``reset --hard HEAD^``, but only when the command is ``git`` (:issue:`9411`, :issue:`10452`).
 
 Deprecations and removed features
 ---------------------------------
@@ -125,6 +131,7 @@ Interactive improvements
 - When exporting interactively defined functions (using ``type``, ``functions`` or ``funcsave``) the function body is now indented, same as in the interactive command line editor (:issue:`8603`).
 - :kbd:`ctrl-x` (``fish_clipboard_copy``) on multiline commands now includes indentation (:issue:`10437`).
 - When using :kbd:`ctrl-x` on Wayland in the VSCode terminal, the clipboard is no longer cleared on :kbd:`ctrl-c`.
+- Measuring a command with `time` now considers the time taken for command substitution (:issue:`9100`).
 
 New or improved bindings
 ^^^^^^^^^^^^^^^^^^^^^^^^
@@ -133,16 +140,18 @@ New or improved bindings
   For example, ``commandline -f yank -f yank-pop`` inserts the last-but-one entry from the kill ring.
 - When the cursor is on a command that resolves to an executable script, :kbd:`alt-o` will now open that script in your editor (:issue:`10266`).
 - During up-arrow history search, :kbd:`shift-delete` will delete the current search item and move to the next older item. Previously this was only supported in the history pager.
+  Same for autosuggestions.
+- :kbd:`ctrl-Z` (alias :kbd:`ctrl-shift-z`) is now bound to redo.
 - Some improvements to the :kbd:`alt-e` binding which edits the commandline in an external editor:
   - The editor's cursor position is copied back to fish. This is currently supported for Vim and Kakoune.
   - Cursor position synchronization is only supported for a set of known editors. This has been extended by also resolving aliases. For example use ``complete --wraps my-vim vim`` to synchronize cursors when `EDITOR=my-vim`.
   - Multiline commands are indented before being sent to the editor, which matches the rendering in fish.
 - The ``-path-component`` bindings like ``backward-kill-path-component`` now treat ``#`` as part of a path component (:issue:`10271`).
 - Bindings like :kbd:`alt-l` that print output in between prompts now work correctly with multiline commandlines.
-- ``alt-d`` on an empty command line lists the directory history again. This restores the behavior of version 2.1.
+- :kbd:`alt-d` on an empty command line lists the directory history again. This restores the behavior of version 2.1.
 - `history-prefix-search-{backward,forward}` now maintain the cursor position instead of moving the cursor to the end of the command line (:issue:`10430`).
-- The ``E`` binding in vi mode now correctly handles the last character of the word, by jumping to the next word (:issue:`9700`).
-- If the terminal supports shifted key codes from the `kitty keyboard protocol <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>`_, ``shift-enter`` now inserts a newline instead of executing the command line.
+- The :kbd:`E` binding in vi mode now correctly handles the last character of the word, by jumping to the next word (:issue:`9700`).
+- If the terminal supports shifted key codes from the `kitty keyboard protocol <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>`_, :kbd:`shift-enter` now inserts a newline instead of executing the command line.
 - Vi mode has seen some improvements but continues to suffer from the lack of people working on it.
   - Insert-mode :kbd:`ctrl-n` accepts autosuggestions (:issue:`10339`).
   - Outside insert mode, the cursor will no longer be placed beyond the last character on the commandline.
@@ -158,6 +167,7 @@ Completions
 ^^^^^^^^^^^
 - Added completions for:
 - Improved some completions
+- Generated completions are now stored in `$XDG_CACHE_HOME/fish` or `~/.cache/fish` by default (:issue:`10369`)
 
 Improved terminal support
 ^^^^^^^^^^^^^^^^^^^^^^^^^
