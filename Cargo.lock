@@ -433,9 +433,9 @@ dependencies = [
 
 [[package]]
 name = "rsconf"
-version = "0.1.2"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b9653c00e095416c7586382524a5ede22b9dec6f067879bd7eed21429721e6d"
+checksum = "5a21859ed369f0e06a22264093fcb2f3baec914b5be39f3fb8533056cad136cc"
 dependencies = [
  "cc",
 ]
@@ -505,8 +505,9 @@ dependencies = [
 
 [[package]]
 name = "terminfo"
-version = "0.8.0"
-source = "git+https://github.com/meh/rust-terminfo?rev=7259f5aa5786a9d396162da0d993e268f6163fb2#7259f5aa5786a9d396162da0d993e268f6163fb2"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4ea810f0692f9f51b382fff5893887bb4580f5fa246fde546e0b13e7fcee662"
 dependencies = [
  "fnv",
  "nom",

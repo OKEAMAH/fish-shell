@@ -16,8 +16,8 @@ fn main() {
     let default_build_dir = env::var("OUT_DIR").unwrap();
     let build_dir = option_env!("FISH_BUILD_DIR").unwrap_or(&default_build_dir);
     rsconf::set_env_value("FISH_BUILD_DIR", build_dir);
-    // We need to canonicalize (i.e. realpath)
-    // the manifest dir because we want to compare it simply as a string at runtime.
+    // We need to canonicalize (i.e. realpath) the manifest dir because we want to be able to
+    // compare it directly as a string at runtime.
     rsconf::set_env_value(
         "CARGO_MANIFEST_DIR",
         std::fs::canonicalize(env!("CARGO_MANIFEST_DIR"))
@@ -75,25 +75,24 @@ fn detect_cfgs(target: &mut Target) {
         ("gettext", &have_gettext),
         // See if libc supports the thread-safe localeconv_l(3) alternative to localeconv(3).
         ("localeconv_l", &|target| {
-            Ok(target.has_symbol("localeconv_l", None))
+            Ok(target.has_symbol("localeconv_l"))
         }),
         ("FISH_USE_POSIX_SPAWN", &|target| {
             Ok(target.has_header("spawn.h"))
         }),
         ("HAVE_PIPE2", &|target| {
-            Ok(target.has_symbol("pipe2", None))
+            Ok(target.has_symbol("pipe2"))
         }),
         ("HAVE_EVENTFD", &|target| {
             Ok(target.has_header("sys/eventfd.h"))
         }),
         ("HAVE_WAITSTATUS_SIGNAL_RET", &|target| {
-            Ok(target.r#if("WEXITSTATUS(0x007f) == 0x7f", "sys/wait.h"))
+            Ok(target.r#if("WEXITSTATUS(0x007f) == 0x7f", &["sys/wait.h"]))
         }),
     ] {
         match handler(target) {
             Err(e) => rsconf::warn!("{}: {}", name, e),
-            Ok(true) => rsconf::enable_cfg(name),
-            Ok(false) => (),
+            Ok(enabled) => rsconf::declare_cfg(name, enabled),
         }
     }
 }
@@ -111,7 +110,7 @@ fn detect_bsd(_: &Target) -> Result<bool, Box<dyn Error>> {
     if !target.chars().all(|c| c.is_ascii_lowercase()) {
         target = target.to_ascii_lowercase();
     }
-    let result = target.ends_with("bsd") || target.ends_with("dragonfly");
+    let is_bsd = target.ends_with("bsd") || target.ends_with("dragonfly");
     #[cfg(any(
         target_os = "dragonfly",
         target_os = "freebsd",
@@ -119,7 +118,7 @@ fn detect_bsd(_: &Target) -> Result<bool, Box<dyn Error>> {
         target_os = "openbsd",
     ))]
     assert!(result, "Target incorrectly detected as not BSD!");
-    Ok(result)
+    Ok(is_bsd)
 }
 
 /// Detect libintl/gettext and its needed symbols to enable internationalization/localization
@@ -144,13 +143,13 @@ fn have_gettext(target: &Target) -> Result<bool, Box<dyn Error>> {
     for symbol in &symbols {
         // Historically, libintl was required in order to use gettext() and co, but that
         // functionality was subsumed by some versions of libc.
-        if target.has_symbol(symbol, None) {
+        if target.has_symbol(symbol) {
             // No need to link anything special for this symbol
             found += 1;
             continue;
         }
         for library in ["intl", "gettextlib"] {
-            if target.has_symbol(symbol, library) {
+            if target.has_symbol_in(symbol, &[library]) {
                 libraries.push(library);
                 found += 1;
                 continue;

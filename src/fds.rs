@@ -259,15 +259,50 @@ pub fn open_cloexec(path: &CStr, flags: OFlag, mode: nix::sys::stat::Mode) -> ni
     }
 }
 
+/// POSIX specifies an open option O_SEARCH for opening directories for later
+/// `fchdir` or `openat`, not for `readdir`. The read permission is not checked,
+/// and the x permission is checked on opening. Not all platforms have this,
+/// so we fall back to O_PATH or O_RDONLY according to the platform.
+pub use o_search::BEST_O_SEARCH;
+
+mod o_search {
+    use super::OFlag;
+    /// On macOS we have O_SEARCH, which is defined as O_EXEC | O_DIRECTORY,
+    /// where O_EXEC is 0x40000000. This is only on macOS 12.0+ or later; however
+    /// prior macOS versions ignores O_EXEC so it is treated the same as O_RDONLY.
+    #[cfg(target_os = "macos")]
+    pub const BEST_O_SEARCH: OFlag =
+        unsafe { OFlag::from_bits_unchecked(libc::O_DIRECTORY | 0x40000000) };
+
+    /// On FreeBSD, we have O_SEARCH = 0x00040000.
+    #[cfg(target_os = "freebsd")]
+    pub const BEST_O_SEARCH: OFlag = unsafe { OFlag::from_bits_unchecked(0x00040000) };
+
+    /// On Linux we can use O_PATH, it has nearly the same semantics. we can use the fd for openat / fchdir, with only requiring
+    /// x permission on the directory.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub const BEST_O_SEARCH: OFlag = unsafe { OFlag::from_bits_unchecked(libc::O_PATH) };
+
+    /// Fall back to O_RDONLY.
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "freebsd",
+        target_os = "macos"
+    )))]
+    pub const BEST_O_SEARCH: OFlag = OFlag::O_RDONLY;
+}
+
 /// Wide character version of open_dir() that also sets the close-on-exec flag (atomically when
 /// possible).
-pub fn wopen_dir(pathname: &wstr, mode: nix::sys::stat::Mode) -> nix::Result<OwnedFd> {
-    open_dir(wcs2zstring(pathname).as_c_str(), mode)
+pub fn wopen_dir(pathname: &wstr, flags: OFlag) -> nix::Result<OwnedFd> {
+    open_dir(wcs2zstring(pathname).as_c_str(), flags)
 }
 
 /// Narrow version of wopen_dir().
-pub fn open_dir(path: &CStr, mode: nix::sys::stat::Mode) -> nix::Result<OwnedFd> {
-    open_cloexec(path, OFlag::O_RDONLY | OFlag::O_DIRECTORY, mode).map(OwnedFd::from)
+pub fn open_dir(path: &CStr, flags: OFlag) -> nix::Result<OwnedFd> {
+    let mode = nix::sys::stat::Mode::empty();
+    open_cloexec(path, flags | OFlag::O_DIRECTORY, mode).map(OwnedFd::from)
 }
 
 /// Close a file descriptor `fd`, retrying on EINTR.
