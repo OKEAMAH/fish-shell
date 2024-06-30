@@ -120,7 +120,7 @@ impl FdEventSignaller {
         let mut ret;
         loop {
             let bytes = c.to_ne_bytes();
-            ret = nix::unistd::write(self.write_fd(), &bytes);
+            ret = nix::unistd::write(unsafe { BorrowedFd::borrow_raw(self.write_fd()) }, &bytes);
 
             match ret {
                 Ok(_) => break,
@@ -222,11 +222,6 @@ pub enum ItemAction {
 }
 
 impl FdMonitorItem {
-    /// Returns the id for this `FdMonitorItem` that is registered with the [`FdMonitor`].
-    pub fn id(&self) -> FdMonitorItemId {
-        self.item_id
-    }
-
     /// Return the duration until the timeout should trigger or `None`. A return of `0` means we are
     /// at or past the timeout.
     fn remaining_time(&self, now: &Instant) -> Option<Duration> {

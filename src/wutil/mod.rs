@@ -26,8 +26,8 @@ use std::fs::{self, canonicalize};
 use std::io::{self, Write};
 use std::os::unix::prelude::*;
 
-extern crate printf as extern_printf;
-pub use extern_printf::sprintf;
+extern crate fish_printf;
+pub use fish_printf::sprintf;
 
 pub use wcstoi::*;
 
@@ -492,7 +492,7 @@ pub fn wrename(old_name: &wstr, new_name: &wstr) -> libc::c_int {
 }
 
 pub fn write_to_fd(input: &[u8], fd: RawFd) -> nix::Result<usize> {
-    nix::unistd::write(fd, input)
+    nix::unistd::write(unsafe { BorrowedFd::borrow_raw(fd) }, input)
 }
 
 /// Write a wide string to a file descriptor. This avoids doing any additional allocation.

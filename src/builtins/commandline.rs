@@ -143,7 +143,7 @@ fn write_part(
                     &mut args,
                     ExpandFlags::SKIP_CMDSUBST,
                     &OperationContext::foreground(
-                        parser.shared(),
+                        parser,
                         Box::new(no_cancel),
                         COMMANDLINE_TOKENS_MAX_EXPANSION,
                     ),
@@ -318,7 +318,7 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             return STATUS_INVALID_ARGS;
         }
 
-        type rl = ReadlineCmd;
+        type RL = ReadlineCmd;
         for arg in &w.argv[w.wopt_index..] {
             let Some(cmd) = input_function_get_code(arg) else {
                 streams
@@ -329,14 +329,14 @@ pub fn commandline(parser: &Parser, streams: &mut IoStreams, args: &mut [&wstr])
             };
             // Don't enqueue a repaint if we're currently in the middle of one,
             // because that's an infinite loop.
-            if matches!(cmd, rl::RepaintMode | rl::ForceRepaint | rl::Repaint) {
+            if matches!(cmd, RL::RepaintMode | RL::ForceRepaint | RL::Repaint) {
                 if parser.libdata().is_repaint {
                     continue;
                 }
             }
 
             // Inserts the readline function at the back of the queue.
-            reader_execute_readline_cmd(CharEvent::from_readline(cmd));
+            reader_execute_readline_cmd(parser, CharEvent::from_readline(cmd));
         }
 
         return STATUS_CMD_OK;

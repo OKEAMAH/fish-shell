@@ -191,10 +191,10 @@ impl From<TokenizerError> for &'static wstr {
     }
 }
 
-impl printf::ToArg<'static> for TokenizerError {
-    fn to_arg(self) -> printf::Arg<'static> {
+impl fish_printf::ToArg<'static> for TokenizerError {
+    fn to_arg(self) -> fish_printf::Arg<'static> {
         let msg: &'static wstr = self.into();
-        printf::Arg::WStr(msg)
+        fish_printf::Arg::WStr(msg)
     }
 }
 
@@ -570,7 +570,7 @@ impl<'c> Tokenizer<'c> {
         fn process_opening_quote(
             this: &mut Tokenizer,
             quoted_cmdsubs: &mut Vec<usize>,
-            paran_offsets: &Vec<usize>,
+            paran_offsets: &[usize],
             quote: char,
         ) -> Result<(), usize> {
             this.on_quote_toggle

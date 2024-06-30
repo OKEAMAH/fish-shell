@@ -26,7 +26,6 @@ use crate::curses::{term, tparm0, tparm1};
 use crate::env::{Environment, TERM_HAS_XN};
 use crate::fallback::fish_wcwidth;
 use crate::flog::FLOGF;
-#[allow(unused_imports)]
 use crate::future::IsSomeAnd;
 use crate::global_safety::RelaxedAtomicBool;
 use crate::highlight::HighlightColorResolver;
@@ -1129,6 +1128,7 @@ impl LayoutCache {
     pub const PROMPT_CACHE_MAX_SIZE: usize = 12;
 
     /// Return the size of the escape code cache.
+    #[cfg(test)]
     pub fn esc_cache_size(&self) -> usize {
         self.esc_cache.len()
     }

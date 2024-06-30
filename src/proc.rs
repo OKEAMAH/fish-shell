@@ -20,11 +20,12 @@ use crate::reader::{fish_is_unwinding_for_exit, reader_schedule_prompt_repaint};
 use crate::redirection::RedirectionSpecList;
 use crate::signal::{signal_set_handlers_once, Signal};
 use crate::threads::MainThread;
-use crate::topic_monitor::{topic_monitor_principal, topic_t, GenerationsList};
+use crate::topic_monitor::{topic_monitor_principal, GenerationsList, Topic};
 use crate::wait_handle::{InternalJobId, WaitHandle, WaitHandleRef, WaitHandleStore};
 use crate::wchar::{wstr, WString, L};
 use crate::wchar_ext::ToWString;
 use crate::wutil::{perror, wbasename, wgettext, wperror};
+use fish_printf::sprintf;
 use libc::{
     EBADF, EINVAL, ENOTTY, EPERM, EXIT_SUCCESS, SIGABRT, SIGBUS, SIGCONT, SIGFPE, SIGHUP, SIGILL,
     SIGINT, SIGKILL, SIGPIPE, SIGQUIT, SIGSEGV, SIGSYS, SIGTTOU, SIG_DFL, SIG_IGN, STDIN_FILENO,
@@ -32,7 +33,6 @@ use libc::{
     WUNTRACED, _SC_CLK_TCK,
 };
 use once_cell::sync::Lazy;
-use printf::sprintf;
 use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::fs;
 use std::io::{Read, Write};
@@ -285,7 +285,7 @@ impl InternalProc {
         assert!(!self.exited(), "Process is already exited");
         self.status.update(status);
         self.exited.store(true, Ordering::Release);
-        topic_monitor_principal().post(topic_t::internal_exit);
+        topic_monitor_principal().post(Topic::internal_exit);
         FLOG!(
             proc_internal_proc,
             "Internal proc",
@@ -1382,13 +1382,13 @@ fn process_mark_finished_children(parser: &Parser, block_ok: bool) {
 
             if proc.has_pid() {
                 // Reaps with a pid.
-                reapgens.set_min_from(topic_t::sigchld, &proc.gens);
-                reapgens.set_min_from(topic_t::sighupint, &proc.gens);
+                reapgens.set_min_from(Topic::sigchld, &proc.gens);
+                reapgens.set_min_from(Topic::sighupint, &proc.gens);
             }
             if proc.internal_proc.borrow().is_some() {
                 // Reaps with an internal process.
-                reapgens.set_min_from(topic_t::internal_exit, &proc.gens);
-                reapgens.set_min_from(topic_t::sighupint, &proc.gens);
+                reapgens.set_min_from(Topic::internal_exit, &proc.gens);
+                reapgens.set_min_from(Topic::sighupint, &proc.gens);
             }
         }
     }
