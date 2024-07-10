@@ -1,4 +1,4 @@
-FROM ubuntu:16.04
+FROM ubuntu:xenial-20201014
 LABEL org.opencontainers.image.source=https://github.com/fish-shell/fish-shell
 
 ENV LANG C.UTF-8
