@@ -11,6 +11,10 @@ if(DEFINED ASAN)
     list(APPEND CARGO_FLAGS "-Z" "build-std")
     list(APPEND FISH_CRATE_FEATURES "asan")
 endif()
+if(DEFINED TSAN)
+    list(APPEND CARGO_FLAGS "-Z" "build-std")
+    list(APPEND FISH_CRATE_FEATURES "tsan")
+endif()
 
 if (Rust_CARGO_TARGET)
     set(rust_target_dir "${FISH_RUST_BUILD_DIR}/${Rust_CARGO_TARGET}")
@@ -19,7 +23,7 @@ else()
 endif()
 
 set(rust_profile $<IF:$<CONFIG:Debug>,debug,release>)
-set(rust_debugflags "$<$<CONFIG:Debug,RelWithDebInfo>:-g>")
+set(rust_debugflags "$<$<CONFIG:Debug>:-g>$<$<CONFIG:RelWithDebInfo>:-g>")
 
 
 # Temporary hack to propogate CMake flags/options to build.rs. We need to get CMake to evaluate the
@@ -28,9 +32,6 @@ set(CMAKE_WITH_GETTEXT "1")
 if(DEFINED WITH_GETTEXT AND NOT "${WITH_GETTEXT}")
     set(CMAKE_WITH_GETTEXT "0")
 endif()
-
-# CMAKE_BINARY_DIR can include symlinks, since we want to compare this to the dir fish is executed in we need to canonicalize it.
-file(REAL_PATH "${CMAKE_BINARY_DIR}" fish_binary_dir)
 
 if(FISH_CRATE_FEATURES)
     set(FEATURES_ARG ${FISH_CRATE_FEATURES})
@@ -42,9 +43,9 @@ get_property(
     TARGET Rust::Rustc PROPERTY IMPORTED_LOCATION
 )
 
-# Tell Cargo where our build directory is so it can find config.h.
+# Tell Cargo where our build directory is so it can find Cargo.toml.
 set(VARS_FOR_CARGO
-    "FISH_BUILD_DIR=${fish_binary_dir}"
+    "FISH_BUILD_DIR=${CMAKE_BINARY_DIR}"
     "PREFIX=${CMAKE_INSTALL_PREFIX}"
     # Temporary hack to propogate CMake flags/options to build.rs.
     "CMAKE_WITH_GETTEXT=${CMAKE_WITH_GETTEXT}"

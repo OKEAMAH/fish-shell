@@ -138,6 +138,15 @@ if(DEFINED ASAN)
         message(FATAL_ERROR "ASAN requires defining the CMake variable Rust_CARGO_TARGET to the
             intended target triple")
     endif()
+endif()
+if(DEFINED TSAN)
+    if(NOT DEFINED Rust_CARGO_TARGET)
+        message(FATAL_ERROR "TSAN requires defining the CMake variable Rust_CARGO_TARGET to the
+            intended target triple")
+    endif()
+endif()
+
+if(DEFINED Rust_CARGO_TARGET)
     list(APPEND cargo_test_flags "--target" ${Rust_CARGO_TARGET})
     list(APPEND cargo_test_flags "--lib")
 endif()

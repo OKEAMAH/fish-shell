@@ -1,6 +1,8 @@
 use super::wopendir;
 use crate::common::{cstr2wcstring, wcs2zstring};
+use crate::libc::{fstatat64, readdir64};
 use crate::wchar::{wstr, WString};
+use crate::wutil::DevInode;
 use libc::{
     DT_BLK, DT_CHR, DT_DIR, DT_FIFO, DT_LNK, DT_REG, DT_SOCK, EACCES, EIO, ELOOP, ENAMETOOLONG,
     ENODEV, ENOENT, ENOTDIR, S_IFBLK, S_IFCHR, S_IFDIR, S_IFIFO, S_IFLNK, S_IFMT, S_IFREG,
@@ -33,10 +35,10 @@ pub struct DirEntry {
     pub name: WString,
 
     /// inode of this entry.
-    pub inode: libc::ino_t,
+    pub inode: u64,
 
-    // Stat buff for this entry, or none if not yet computed.
-    stat: Cell<Option<libc::stat>>,
+    // Device, inode pair for this entry, or none if not yet computed.
+    dev_inode: Cell<Option<DevInode>>,
 
     // The type of the entry. This is initially none; it may be populated eagerly via readdir()
     // on some filesystems, or later via stat(). If stat() fails, the error is silently ignored
@@ -76,12 +78,12 @@ impl DirEntry {
     pub fn is_possible_link(&self) -> Option<bool> {
         self.possible_link
     }
-    /// Return the stat buff for this entry, invoking stat() if necessary.
-    pub fn stat(&self) -> Option<libc::stat> {
-        if self.stat.get().is_none() {
+    /// Return the device, inode pair for this entry, invoking stat() if necessary.
+    pub fn dev_inode(&self) -> Option<DevInode> {
+        if self.dev_inode.get().is_none() {
             self.do_stat();
         }
-        self.stat.get()
+        self.dev_inode.get()
     }
 
     // Reset our fields.
@@ -89,7 +91,7 @@ impl DirEntry {
         self.name.clear();
         self.inode = unsafe { std::mem::zeroed() };
         self.typ.set(None);
-        self.stat.set(None);
+        self.dev_inode.set(None);
     }
 
     // Populate our stat buffer, and type. Errors are silently ignored.
@@ -102,10 +104,13 @@ impl DirEntry {
             return;
         }
         let narrow = wcs2zstring(&self.name);
-        let mut s: libc::stat = unsafe { std::mem::zeroed() };
-        if unsafe { libc::fstatat(fd, narrow.as_ptr(), &mut s, 0) } == 0 {
-            self.stat.set(Some(s));
-            self.typ.set(stat_mode_to_entry_type(s.st_mode));
+        if let Some((st_dev, st_ino, st_mode)) = fstatat64(fd, &narrow, 0) {
+            let dev_inode = DevInode {
+                device: st_dev,
+                inode: st_ino,
+            };
+            self.dev_inode.set(Some(dev_inode));
+            self.typ.set(stat_mode_to_entry_type(st_mode));
         } else {
             match errno::errno().0 {
                 ELOOP => {
@@ -219,7 +224,7 @@ impl DirIter {
         let entry = DirEntry {
             name: WString::new(),
             inode: 0,
-            stat: Cell::new(None),
+            dev_inode: Cell::new(None),
             typ: Cell::new(None),
             dirfd: dir.clone(),
             possible_link: None,
@@ -247,8 +252,7 @@ impl DirIter {
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<io::Result<&DirEntry>> {
         errno::set_errno(errno::Errno(0));
-        let dent = unsafe { libc::readdir(self.dir.dir()).as_ref() };
-        let Some(dent) = dent else {
+        let Some((d_name, d_name_len, d_ino, d_type)) = readdir64(self.dir.dir()) else {
             // readdir distinguishes between EOF and error via errno.
             let err = errno::errno().0;
             if err == 0 {
@@ -258,9 +262,10 @@ impl DirIter {
             }
         };
 
+        let d_name = unsafe { slice::from_raw_parts(d_name, d_name_len) };
         // dent.d_name is c_char; pretend it's u8.
         assert!(std::mem::size_of::<libc::c_char>() == std::mem::size_of::<u8>());
-        let d_name_cchar = &dent.d_name;
+        let d_name_cchar = &d_name;
         let d_name = unsafe {
             slice::from_raw_parts(d_name_cchar.as_ptr() as *const u8, d_name_cchar.len())
         };
@@ -271,22 +276,12 @@ impl DirIter {
             return self.next();
         }
 
-        let nul_pos = dent.d_name.iter().position(|b| *b == 0).unwrap();
-        let d_name: Vec<u8> = dent.d_name[..nul_pos + 1]
-            .iter()
-            .map(|b| *b as u8)
-            .collect();
+        let nul_pos = d_name.iter().position(|b| *b == 0).unwrap();
+        let d_name = &d_name[..nul_pos + 1];
         self.entry.reset();
-        self.entry.name = cstr2wcstring(&d_name);
-        #[cfg(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd"))]
-        {
-            self.entry.inode = dent.d_fileno;
-        }
-        #[cfg(not(any(target_os = "freebsd", target_os = "netbsd", target_os = "openbsd")))]
-        {
-            self.entry.inode = dent.d_ino;
-        }
-        let typ = dirent_type_to_entry_type(dent.d_type);
+        self.entry.name = cstr2wcstring(d_name);
+        self.entry.inode = d_ino;
+        let typ = dirent_type_to_entry_type(d_type);
         // Do not store symlinks as we will need to resolve them.
         if typ != Some(DirEntryType::lnk) {
             self.entry.typ.set(typ);

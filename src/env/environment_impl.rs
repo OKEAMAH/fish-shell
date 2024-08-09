@@ -63,12 +63,12 @@ fn next_export_generation() -> ExportGeneration {
     1 + GEN.fetch_add(1, Ordering::Relaxed)
 }
 
-fn set_umask(list_val: &Vec<WString>) -> EnvStackSetResult {
+fn set_umask(list_val: &[WString]) -> EnvStackSetResult {
     if list_val.len() != 1 || list_val[0].is_empty() {
-        return EnvStackSetResult::ENV_INVALID;
+        return EnvStackSetResult::Invalid;
     }
     let Ok(mask) = fish_wcstol_radix(&list_val[0], 8) else {
-        return EnvStackSetResult::ENV_INVALID;
+        return EnvStackSetResult::Invalid;
     };
 
     #[allow(
@@ -77,12 +77,12 @@ fn set_umask(list_val: &Vec<WString>) -> EnvStackSetResult {
         clippy::absurd_extreme_comparisons
     )]
     if mask > 0o777 || mask < 0 {
-        return EnvStackSetResult::ENV_INVALID;
+        return EnvStackSetResult::Invalid;
     }
     // Do not actually create a umask variable. On env_stack_t::get() it will be calculated.
     // SAFETY: umask cannot fail.
     unsafe { libc::umask(mask as libc::mode_t) };
-    EnvStackSetResult::ENV_OK
+    EnvStackSetResult::Ok
 }
 
 /// A query for environment variables.
@@ -273,10 +273,7 @@ impl Iterator for EnvNodeIter {
 }
 
 lazy_static! {
-    ///  XXX: Possible safety issue here as EnvNodeRef is not Send/Sync and shouldn't
-    ///  be placed in a static context without some sort of Send/Sync wrapper.
-    ///  lazy_static papers over this but it triggers rust lints if you use
-    ///  once_cell::sync::Lazy or std::sync::OnceLock instead.
+    // All accesses to the EnvNode are protected by a global lock.
     static ref GLOBAL_NODE: EnvNodeRef = EnvNodeRef::new(false, None);
 }
 
@@ -303,6 +300,7 @@ struct PerprocData {
     statuses: Statuses,
 }
 
+#[derive(Clone)]
 pub struct EnvScopedImpl {
     // A linked list of scopes.
     locals: EnvNodeRef,
@@ -693,6 +691,7 @@ impl ModResult {
 }
 
 /// A mutable "subclass" of EnvScopedImpl.
+#[derive(Clone)]
 pub struct EnvStackImpl {
     pub base: EnvScopedImpl,
 
@@ -703,7 +702,6 @@ pub struct EnvStackImpl {
 impl EnvStackImpl {
     /// Return a new impl representing global variables, with a single local scope.
     pub fn new() -> EnvMutex<EnvStackImpl> {
-        // XXX: Safety issue: We are accessing GLOBAL_NODE without having the global mutex locked!
         let globals = GLOBAL_NODE.clone();
         let locals = EnvNodeRef::new(false, None);
         let base = EnvScopedImpl::new(locals, globals);
@@ -738,7 +736,7 @@ impl EnvStackImpl {
             flags.pathvar = Some(query.pathvar);
         }
 
-        let mut result = ModResult::new(EnvStackSetResult::ENV_OK);
+        let mut result = ModResult::new(EnvStackSetResult::Ok);
         if query.has_scope {
             // The user requested a particular scope.
             // If we don't have uvars, fall back to using globals.
@@ -799,26 +797,26 @@ impl EnvStackImpl {
         let query = Query::new(mode);
         // Users can't remove read-only keys.
         if query.user && is_read_only(key) {
-            return ModResult::new(EnvStackSetResult::ENV_SCOPE);
+            return ModResult::new(EnvStackSetResult::Scope);
         }
 
         // Helper to invoke remove_from_chain and map a false return to not found.
         fn remove_from_chain(node: &mut EnvNodeRef, key: &wstr) -> EnvStackSetResult {
             if EnvStackImpl::remove_from_chain(node, key) {
-                EnvStackSetResult::ENV_OK
+                EnvStackSetResult::Ok
             } else {
-                EnvStackSetResult::ENV_NOT_FOUND
+                EnvStackSetResult::NotFound
             }
         }
 
-        let mut result = ModResult::new(EnvStackSetResult::ENV_OK);
+        let mut result = ModResult::new(EnvStackSetResult::Ok);
         if query.has_scope {
             // The user requested erasing from a particular scope.
             if query.universal {
                 if uvars().remove(key) {
-                    result.status = EnvStackSetResult::ENV_OK;
+                    result.status = EnvStackSetResult::Ok;
                 } else {
-                    result.status = EnvStackSetResult::ENV_NOT_FOUND;
+                    result.status = EnvStackSetResult::NotFound;
                 }
                 // Note we have historically set this even if the uvar is not found.
                 result.uvar_modified = true;
@@ -846,7 +844,7 @@ impl EnvStackImpl {
         } else if uvars().remove(key) {
             result.uvar_modified = true;
         } else {
-            result.status = EnvStackSetResult::ENV_NOT_FOUND;
+            result.status = EnvStackSetResult::NotFound;
         }
         result
     }
@@ -937,12 +935,12 @@ impl EnvStackImpl {
 
         // If a variable is electric, it may only be set in the global scope.
         if query.has_scope && !query.global {
-            return Some(EnvStackSetResult::ENV_SCOPE);
+            return Some(EnvStackSetResult::Scope);
         }
 
         // If the variable is read-only, the user may not set it.
         if query.user && ev.readonly() {
-            return Some(EnvStackSetResult::ENV_PERM);
+            return Some(EnvStackSetResult::Perm);
         }
 
         // Be picky about exporting.
@@ -953,7 +951,7 @@ impl EnvStackImpl {
                 query.unexports
             };
             if !matches {
-                return Some(EnvStackSetResult::ENV_SCOPE);
+                return Some(EnvStackSetResult::Scope);
             }
         }
 
@@ -967,7 +965,7 @@ impl EnvStackImpl {
                 self.base.perproc_data.pwd = pwd;
                 self.base.globals.borrow_mut().changed_exported();
             }
-            return Some(EnvStackSetResult::ENV_OK);
+            return Some(EnvStackSetResult::Ok);
         }
         // Claim the value.
         let val = std::mem::take(val);
@@ -979,7 +977,7 @@ impl EnvStackImpl {
             pathvar: Some(false),
         };
         Self::set_in_node(&mut self.base.globals, key, val, flags);
-        return Some(EnvStackSetResult::ENV_OK);
+        return Some(EnvStackSetResult::Ok);
     }
 
     /// Set a universal variable, inheriting as applicable from the given old variable.
@@ -1093,7 +1091,7 @@ impl EnvStackImpl {
 }
 
 // This is a big dorky lock we take around everything. Everything exported from this module should be
-// wrapped in an EnvMutexGurad using this lock.
+// wrapped in an EnvMutexGuard using this lock.
 // Fine grained locking is annoying here because nodes may be shared between stacks, so each
 // node would need its own lock, and each stack would need to take all the locks before any operation.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -1126,7 +1124,7 @@ pub struct EnvMutex<T> {
 }
 
 impl<T> EnvMutex<T> {
-    fn new(inner: T) -> Self {
+    pub fn new(inner: T) -> Self {
         Self {
             inner: UnsafeCell::new(inner),
         }

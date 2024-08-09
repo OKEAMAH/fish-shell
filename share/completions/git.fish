@@ -1367,6 +1367,7 @@ complete -f -c git -n '__fish_git_using_command commit' -s s -l signoff -d 'Appe
 complete -f -c git -n '__fish_git_using_command commit' -l no-signoff -d 'Do not append Signed-off-by trailer to commit message'
 complete -f -c git -n '__fish_git_using_command commit' -s C -l reuse-message -d 'Reuse log message and authorship of an existing commit'
 complete -f -c git -n '__fish_git_using_command commit' -s c -l reedit-message -d 'Like --reuse-message, but allow editing commit message'
+complete -f -c git -n '__fish_git_using_command commit' -s e -l edit -d 'Further edit the message taken from -m, -C, or -F'
 # TODO options
 
 ### count-objects
@@ -1547,7 +1548,7 @@ complete -c git -n '__fish_git_using_command log' -l source -d 'Print ref name b
 complete -c git -n '__fish_git_using_command log' -l use-mailmap
 complete -c git -n '__fish_git_using_command log' -l full-diff
 complete -c git -n '__fish_git_using_command log' -l log-size
-complete -x -c git -n '__fish_git_using_command log' -s L
+complete -r -F -c git -n '__fish_git_using_command log' -s L -d 'Trace the evolution of the line range given by <start>,<end>, or regex <funcname>, within the <file>'
 complete -x -c git -n '__fish_git_using_command log' -s n -l max-count -d 'Limit the number of commits before starting to show the commit output'
 complete -x -c git -n '__fish_git_using_command log' -l skip -d 'Skip given number of commits'
 complete -x -c git -n '__fish_git_using_command log' -l since -d 'Show commits more recent than specified date'
@@ -1992,7 +1993,7 @@ complete -c git -n '__fish_git_using_command reset' -n 'not contains -- -- (comm
 # or remove files from the staging area.
 # Deleted files seem to need a "--" separator.
 complete -f -c git -n '__fish_git_using_command reset' -n 'not contains -- -- (commandline -xpc)' -a '(__fish_git_files all-staged modified)'
-complete -f -c git -n '__fish_git_using_command reset' -n 'contains -- -- (commandline -xpc)' -a '(__fish_git_files all-staged deleted modified)'
+complete -F -c git -n '__fish_git_using_command reset' -n 'contains -- -- (commandline -xpc)'
 complete -f -c git -n '__fish_git_using_command reset' -n 'not contains -- -- (commandline -xpc)' -a '(__fish_git_reflog)' -d Reflog
 # TODO options
 

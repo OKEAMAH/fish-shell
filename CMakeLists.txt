@@ -1,15 +1,10 @@
-# CMake 3.19 is needed for file(REAL_PATH)
-cmake_minimum_required(VERSION 3.19)
+cmake_minimum_required(VERSION 3.5)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
-include(cmake/Mac.cmake)
-
-project(fish)
+project(fish LANGUAGES C)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# We are C++11.
-set(CMAKE_CXX_STANDARD 11)
 set(DEFAULT_BUILD_TYPE "Debug")
 
 # Generate Xcode schemas (but not for tests).
@@ -51,9 +46,8 @@ get_filename_component(REAL_CMAKE_SOURCE_DIR "${CMAKE_SOURCE_DIR}" REALPATH)
 add_definitions(-DCMAKE_BINARY_DIR="${REAL_CMAKE_BINARY_DIR}")
 add_definitions(-DCMAKE_SOURCE_DIR="${REAL_CMAKE_SOURCE_DIR}")
 
-
-# Define a function to link dependencies.
-function(FISH_LINK_DEPS_AND_SIGN target)
+# Define a function to build and link dependencies.
+function(CREATE_TARGET target)
   add_custom_target(
     ${target} ALL
     COMMAND
@@ -61,7 +55,8 @@ function(FISH_LINK_DEPS_AND_SIGN target)
         env ${VARS_FOR_CARGO}
           ${Rust_CARGO}
             build --bin ${target}
-            $<$<CONFIG:Release,RelWithDebInfo>:--release>
+            $<$<CONFIG:Release>:--release>
+            $<$<CONFIG:RelWithDebInfo>:--release>
             --target ${Rust_CARGO_TARGET}
             ${CARGO_FLAGS}
             ${FEATURES_ARG}
@@ -71,24 +66,22 @@ function(FISH_LINK_DEPS_AND_SIGN target)
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     USES_TERMINAL
   )
-  codesign_on_mac(${target})
-endfunction(FISH_LINK_DEPS_AND_SIGN)
+endfunction(CREATE_TARGET)
 
 # Define fish.
-fish_link_deps_and_sign(fish)
+create_target(fish)
 
 # Define fish_indent.
-fish_link_deps_and_sign(fish_indent)
+create_target(fish_indent)
 
 # Define fish_key_reader.
-fish_link_deps_and_sign(fish_key_reader)
+create_target(fish_key_reader)
 
 # Set up the docs.
 include(cmake/Docs.cmake)
 
 # A helper for running tests.
-add_executable(fish_test_helper src/fish_test_helper.cpp)
-
+add_executable(fish_test_helper src/fish_test_helper.c)
 # Set up tests.
 include(cmake/Tests.cmake)
 

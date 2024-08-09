@@ -41,12 +41,13 @@ use fish::{
     fprintf, function, future_feature_flags as features,
     history::{self, start_private_mode},
     io::IoChain,
+    libc::{getrusage64, timeval64},
     nix::{getpid, isatty},
     panic::panic_handler,
     parse_constants::{ParseErrorList, ParseTreeFlags},
     parse_tree::ParsedSource,
     parse_util::parse_util_detect_errors_in_ast,
-    parser::{BlockType, Parser},
+    parser::{BlockType, CancelBehavior, Parser},
     path::path_get_config,
     printf,
     proc::{
@@ -55,16 +56,15 @@ use fish::{
     },
     reader::{reader_init, reader_read, term_copy_modes},
     signal::{signal_clear_cancel, signal_unblock_all},
-    threads::{self},
-    topic_monitor,
+    threads, topic_monitor,
     wchar::prelude::*,
     wutil::waccess,
 };
 use std::ffi::{CString, OsStr, OsString};
 use std::fs::File;
-use std::mem::MaybeUninit;
 use std::os::unix::prelude::*;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::{env, ops::ControlFlow};
@@ -103,23 +103,20 @@ struct FishCmdOpts {
 }
 
 /// Return a timeval converted to milliseconds.
-#[allow(clippy::unnecessary_cast)]
-fn tv_to_msec(tv: &libc::timeval) -> i64 {
+fn tv_to_msec(tv: &timeval64) -> i64 {
     // milliseconds per second
-    let mut msec = tv.tv_sec as i64 * 1000;
+    let mut msec = tv.tv_sec * 1000;
     // microseconds per millisecond
-    msec += tv.tv_usec as i64 / 1000;
+    msec += tv.tv_usec / 1000;
     msec
 }
 
 fn print_rusage_self() {
-    let mut rs = MaybeUninit::uninit();
-    if unsafe { libc::getrusage(libc::RUSAGE_SELF, rs.as_mut_ptr()) } != 0 {
+    let Some(rs) = getrusage64(libc::RUSAGE_SELF) else {
         let s = CString::new("getrusage").unwrap();
         unsafe { libc::perror(s.as_ptr()) }
         return;
-    }
-    let rs: libc::rusage = unsafe { rs.assume_init() };
+    };
     let rss_kb = if cfg!(target_os = "macos") {
         // mac use bytes.
         rs.ru_maxrss / 1024
@@ -167,7 +164,7 @@ fn determine_config_directory_paths(argv0: impl AsRef<Path>) -> ConfigPaths {
                 data: manifest_dir.join("share"),
                 sysconf: manifest_dir.join("etc"),
                 doc: manifest_dir.join("user_doc/html"),
-                bin: exec_path.clone(),
+                bin: exec_path.parent().unwrap().to_owned(),
             }
         }
 
@@ -591,7 +588,9 @@ fn throwing_main() -> i32 {
         ScopeGuard::new((), |()| restore_term_foreground_process_group_for_exit());
     let _restore_term = reader_init();
 
-    let parser = Parser::principal_parser();
+    // Construct the root parser!
+    let env = Rc::new(EnvStack::globals().create_child(true /* dispatches_var_changes */));
+    let parser: &Parser = &Parser::new(env, CancelBehavior::Clear);
     parser.set_syncs_uvars(!opts.no_config);
 
     if !opts.no_exec && !opts.no_config {
